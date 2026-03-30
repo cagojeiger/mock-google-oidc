@@ -31,7 +31,7 @@ sequenceDiagram
     Note over U,IDP: 4. 토큰 교환 (+ PKCE 검증 + code 1회용)
     U->>App: GET /callback?code={code}&state={state}
     App->>IDP: POST /token (code, code_verifier, client_id, client_secret, grant_type)
-    IDP->>IDP: grant_type 검증 → code 소비 → PKCE 검증
+    IDP->>IDP: grant_type 검증 → PKCE 검증 → code 소비
     IDP-->>App: {"access_token", "id_token", "expires_in", "token_type"}
 
     Note over U,IDP: 5. 사용자 정보 조회

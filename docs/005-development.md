@@ -67,7 +67,7 @@ http://localhost:9082/o/oauth2/v2/auth?redirect_uri=http://localhost:9082/health
 | `POST /token` | code 1회용 (재사용 시 400), grant_type 검증 |
 | `POST /token` (PKCE) | S256 정상, S256 불일치, verifier 누락, plain 정상, PKCE 없이도 동작 |
 | `GET /v1/userinfo` | 정상, 토큰 없음 401, 잘못된 토큰 401, userinfo_error |
-| `GET /.well-known/openid-configuration` | JSON 형식, URL, client_secret_post만 |
+| `GET /.well-known/openid-configuration` | JSON 형식, URL, client_secret_post + client_secret_basic |
 | `GET /oauth2/v3/certs` | JWKS 형식, RSA, RS256 |
 | `GET /health` | status=ok |
 

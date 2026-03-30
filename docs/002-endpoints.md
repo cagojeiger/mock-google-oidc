@@ -126,7 +126,7 @@ sub = fmt.Sprintf("%x", sha256(email)[:10])
 **인증 방식:**
 - `client_secret_post`: form body에 `client_id` + `client_secret` 전달
 - `client_secret_basic`: `Authorization: Basic base64(client_id:client_secret)` 헤더
-- 두 방식 모두 지원. Basic 헤더가 있으면 form body보다 우선
+- 두 방식 모두 지원. form body에 client_id/client_secret이 없을 때 Basic 헤더에서 보충
 
 **PKCE 검증:**
 - code에 `code_challenge`가 저장되어 있으면 `code_verifier` 필수
