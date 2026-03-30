@@ -1,12 +1,12 @@
 # mock-google-oidc
 
-Google OIDC 호환 mock Identity Provider. 패스워드 없이 이메일만 입력하면 로그인된다.
+Google OIDC 호환 mock Identity Provider. 패스워드 없이 이메일+이름만 입력하면 로그인된다.
 
 ## 왜 필요한가
 
 - Google OAuth를 사용하는 서비스를 로컬에서 개발/테스트할 때
 - 실제 Google 계정 없이 OIDC 인증 플로우를 테스트할 때
-- oauth2-proxy, authgate 같은 OIDC RP와 연동 테스트할 때
+- oauth2-proxy 같은 OIDC RP와 연동 테스트할 때
 
 ## 빠른 시작
 
@@ -26,6 +26,17 @@ docker compose up --build
 
 ```
 localhost:4180 → oauth2-proxy → mock-google-oidc 로그인 → Login 클릭 → nginx
+```
+
+### Docker 이미지 사용
+
+```bash
+docker pull ghcr.io/cagojeiger/mock-google-oidc:latest
+
+docker run -p 9082:9082 \
+  -e LISTEN_ADDR=:9082 \
+  -e PUBLIC_URL=http://localhost:9082 \
+  ghcr.io/cagojeiger/mock-google-oidc:latest
 ```
 
 ## mock-google-oidc 단독 사용
@@ -54,8 +65,8 @@ OAUTH_AUTH_URL=http://localhost:9082/o/oauth2/v2/auth
 OAUTH_TOKEN_URL=http://localhost:9082/token
 OAUTH_USERINFO_URL=http://localhost:9082/v1/userinfo
 OAUTH_JWKS_URL=http://localhost:9082/oauth2/v3/certs
-OAUTH_CLIENT_ID=anything      # 검증 안 함
-OAUTH_CLIENT_SECRET=anything  # 검증 안 함
+OAUTH_CLIENT_ID=my-app          # 값 자유 (매칭만 함)
+OAUTH_CLIENT_SECRET=my-secret   # 값 자유 (존재만 확인)
 ```
 
 ### 환경 변수
@@ -112,16 +123,46 @@ http://localhost:9082/o/oauth2/v2/auth?redirect_uri=http://localhost:9082/health
 | client_secret 값 검증 | X (존재만 확인) |
 | HTTPS | X (HTTP만) |
 
-## 테스트
+## 개발
 
 ```bash
-# 단위 + 플로우 테스트 (34개)
+# 테스트 (38개)
 go test ./...
 
 # Docker로 전체 스택 테스트
 docker compose up --build
 # 브라우저에서 http://localhost:4180 접속
 ```
+
+### 프로젝트 구조
+
+```
+.
+├── main.go              # 서버 시작, 라우팅
+├── handler.go           # HTTP 핸들러
+├── store.go             # 인메모리 저장소
+├── jwt.go               # RSA 키, id_token 서명, JWKS
+├── template.go          # 로그인 화면 HTML
+├── handler_test.go      # 단위 테스트
+├── flow_test.go         # 전체 플로우 테스트
+├── Dockerfile
+├── docker-compose.yml
+├── VERSION              # 릴리즈 버전
+└── docs/                # 상세 스펙
+```
+
+## CI/CD
+
+| 트리거 | 동작 |
+|--------|------|
+| PR → main | `go build` + `go test` |
+| VERSION 변경이 main에 머지 | 태그 생성 → GitHub Release → ghcr.io 배포 |
+
+### 릴리즈 방법
+
+1. `VERSION` 파일 수정 (예: `0.1.0` → `0.2.0`)
+2. PR 생성 + squash merge
+3. 자동: 태그 `v0.2.0` → GitHub Release → `ghcr.io/cagojeiger/mock-google-oidc:v0.2.0`
 
 ## 상세 스펙
 
