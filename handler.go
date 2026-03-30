@@ -35,7 +35,7 @@ func handleDiscovery(publicURL string) http.HandlerFunc {
 			"subject_types_supported":               []string{"public"},
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 			"scopes_supported":                      []string{"openid", "email", "profile"},
-			"token_endpoint_auth_methods_supported": []string{"client_secret_post", "client_secret_basic"},
+			"token_endpoint_auth_methods_supported": []string{"client_secret_post"},
 			"claims_supported":                      []string{"aud", "email", "email_verified", "exp", "family_name", "given_name", "iat", "iss", "name", "picture", "sub"},
 			"code_challenge_methods_supported":      []string{"plain", "S256"},
 			"grant_types_supported":                 []string{"authorization_code"},
@@ -140,13 +140,19 @@ func handleToken(publicURL string, keys *KeyPair, store *Store) http.HandlerFunc
 		}
 		r.ParseForm()
 
+		grantType := r.FormValue("grant_type")
+		if grantType != "authorization_code" {
+			jsonError(w, http.StatusBadRequest, "unsupported_grant_type", "Only authorization_code is supported.")
+			return
+		}
+
 		code := r.FormValue("code")
 		if code == "" {
 			jsonError(w, http.StatusBadRequest, "invalid_grant", "Code is required.")
 			return
 		}
 
-		entry, ok := store.LoadCode(code)
+		entry, ok := store.ConsumeCode(code)
 		if !ok {
 			jsonError(w, http.StatusBadRequest, "invalid_grant", "Code not found or already redeemed.")
 			return
@@ -171,7 +177,7 @@ func handleToken(publicURL string, keys *KeyPair, store *Store) http.HandlerFunc
 		}
 
 		accessToken := "ya29." + randomCode()
-		store.SaveToken(accessToken, code)
+		store.SaveToken(accessToken, entry)
 
 		claims := map[string]any{
 			"iss":            publicURL,

@@ -346,6 +346,64 @@ func TestToken_IDTokenClaims(t *testing.T) {
 	}
 }
 
+func TestToken_CodeSingleUse(t *testing.T) {
+	mux, store, _ := setupTestServer()
+	store.SaveCode("once-code", &CodeEntry{
+		Sub:          "sub1",
+		Email:        "once@example.com",
+		ResponseMode: "normal",
+	})
+
+	// First use — should succeed
+	w1 := postToken(mux, url.Values{
+		"code":          {"once-code"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/cb"},
+		"grant_type":    {"authorization_code"},
+	})
+	if w1.Code != 200 {
+		t.Fatalf("first use: expected 200, got %d", w1.Code)
+	}
+
+	// Second use — should fail
+	w2 := postToken(mux, url.Values{
+		"code":          {"once-code"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/cb"},
+		"grant_type":    {"authorization_code"},
+	})
+	if w2.Code != 400 {
+		t.Fatalf("second use: expected 400, got %d", w2.Code)
+	}
+}
+
+func TestToken_WrongGrantType(t *testing.T) {
+	mux, store, _ := setupTestServer()
+	store.SaveCode("gt-code", &CodeEntry{
+		Sub:          "sub1",
+		Email:        "gt@example.com",
+		ResponseMode: "normal",
+	})
+
+	w := postToken(mux, url.Values{
+		"code":          {"gt-code"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/cb"},
+		"grant_type":    {"refresh_token"},
+	})
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["error"] != "unsupported_grant_type" {
+		t.Errorf("expected unsupported_grant_type, got %s", resp["error"])
+	}
+}
+
 // --- Token PKCE ---
 
 func TestToken_PKCE_S256_Valid(t *testing.T) {
@@ -486,13 +544,13 @@ func TestToken_NoPKCE_StillWorks(t *testing.T) {
 
 func TestUserinfo_Normal(t *testing.T) {
 	mux, store, _ := setupTestServer()
-	store.SaveCode("ui-code", &CodeEntry{
+	entry := &CodeEntry{
 		Sub:          DeterministicSub("ui@example.com"),
 		Email:        "ui@example.com",
 		Name:         "UI User",
 		ResponseMode: "normal",
-	})
-	store.SaveToken("ya29.test-token", "ui-code")
+	}
+	store.SaveToken("ya29.test-token", entry)
 
 	req := httptest.NewRequest("GET", "/v1/userinfo", nil)
 	req.Header.Set("Authorization", "Bearer ya29.test-token")
@@ -545,12 +603,12 @@ func TestUserinfo_InvalidToken(t *testing.T) {
 
 func TestUserinfo_ErrorMode(t *testing.T) {
 	mux, store, _ := setupTestServer()
-	store.SaveCode("uierr-code", &CodeEntry{
+	errEntry := &CodeEntry{
 		Sub:          "sub1",
 		Email:        "err@example.com",
 		ResponseMode: "userinfo_error",
-	})
-	store.SaveToken("ya29.err-token", "uierr-code")
+	}
+	store.SaveToken("ya29.err-token", errEntry)
 
 	req := httptest.NewRequest("GET", "/v1/userinfo", nil)
 	req.Header.Set("Authorization", "Bearer ya29.err-token")

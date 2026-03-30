@@ -36,7 +36,7 @@ func (s *Store) SaveCode(code string, entry *CodeEntry) {
 	s.codes.Store(code, entry)
 }
 
-// LoadCode retrieves a CodeEntry by authorization code.
+// LoadCode retrieves a CodeEntry by authorization code (without consuming it).
 func (s *Store) LoadCode(code string) (*CodeEntry, bool) {
 	v, ok := s.codes.Load(code)
 	if !ok {
@@ -45,9 +45,19 @@ func (s *Store) LoadCode(code string) (*CodeEntry, bool) {
 	return v.(*CodeEntry), true
 }
 
-// SaveToken maps an access token to its originating authorization code.
-func (s *Store) SaveToken(accessToken, code string) {
-	s.tokens.Store(accessToken, code)
+// ConsumeCode retrieves and deletes a CodeEntry. Returns false if not found.
+// Authorization codes are single-use per OAuth spec.
+func (s *Store) ConsumeCode(code string) (*CodeEntry, bool) {
+	v, ok := s.codes.LoadAndDelete(code)
+	if !ok {
+		return nil, false
+	}
+	return v.(*CodeEntry), true
+}
+
+// SaveToken maps an access token directly to a CodeEntry.
+func (s *Store) SaveToken(accessToken string, entry *CodeEntry) {
+	s.tokens.Store(accessToken, entry)
 }
 
 // LoadCodeByToken resolves an access token to its CodeEntry.
@@ -56,7 +66,7 @@ func (s *Store) LoadCodeByToken(accessToken string) (*CodeEntry, bool) {
 	if !ok {
 		return nil, false
 	}
-	return s.LoadCode(v.(string))
+	return v.(*CodeEntry), true
 }
 
 // DeterministicSub generates a stable sub from an email address.
