@@ -25,7 +25,7 @@ func main() {
 	mux := http.NewServeMux()
 	RegisterHandlers(mux, publicURL, keys, store)
 
-	slog.Info("test-idp starting", "addr", addr, "publicURL", publicURL, "version", version)
+	slog.Info("mock-google-oidc starting", "addr", addr, "publicURL", publicURL, "version", version)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		slog.Error("server failed", "error", err)
 		os.Exit(1)

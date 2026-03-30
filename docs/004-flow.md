@@ -28,10 +28,10 @@ sequenceDiagram
     IDP->>IDP: code 생성 + code_challenge 저장
     IDP->>U: 302 → redirect_uri?code={code}&state={state}
 
-    Note over U,IDP: 4. 토큰 교환 (+ PKCE 검증)
+    Note over U,IDP: 4. 토큰 교환 (+ PKCE 검증 + code 1회용)
     U->>App: GET /callback?code={code}&state={state}
-    App->>IDP: POST /token (code, code_verifier, client_id, client_secret)
-    IDP->>IDP: PKCE 검증: base64url(sha256(verifier)) == challenge
+    App->>IDP: POST /token (code, code_verifier, client_id, client_secret, grant_type)
+    IDP->>IDP: grant_type 검증 → code 소비 → PKCE 검증
     IDP-->>App: {"access_token", "id_token", "expires_in", "token_type"}
 
     Note over U,IDP: 5. 사용자 정보 조회
@@ -46,11 +46,13 @@ sequenceDiagram
 
 | 단계 | Google | mock-google-oidc | 차이 |
 |------|--------|-----------------|------|
-| Authorization URL | `accounts.google.com/o/oauth2/v2/auth` | `localhost:8082/o/oauth2/v2/auth` | 호스트 |
+| Authorization URL | `accounts.google.com/o/oauth2/v2/auth` | `localhost:9082/o/oauth2/v2/auth` | 호스트 |
 | 로그인 화면 | 이메일 → 패스워드 → 동의 (3단계) | 이메일 + 이름 → Login (1단계) | **유일한 UX 차이** |
 | PKCE | S256, plain 지원 | S256, plain 지원 | 없음 |
 | Callback | `redirect_uri?code=...&state=...` | 동일 | 없음 |
 | Token 요청 | POST + code + code_verifier | 동일 형식 | 없음 |
+| code 1회용 | 예 | 예 | 없음 |
+| grant_type 검증 | 예 | 예 (authorization_code만) | 없음 |
 | Token 응답 | `{access_token, id_token, ...}` | 동일 형식 | 없음 |
 | id_token | RS256 JWT | RS256 JWT | 키만 다름 |
 | UserInfo | `{sub, email, name, ...}` | 동일 형식 | 없음 |
@@ -62,7 +64,7 @@ sequenceDiagram
 
 ```
 sub = fmt.Sprintf("%x", sha256("alice@example.com")[:10])
-    = "e3b0c44298fc1c149afb"  // 20자리 hex
+    = "c160f8cc69a4f0bf2b0c"  // 20자리 hex
 ```
 
 | 동작 | 설명 |
@@ -90,7 +92,7 @@ Relying Party → GET /v1/userinfo → 500 {"error": "server_error"}
 
 ## 환경 변수
 
-| 변수 | 기본값 | 설명 |
-|------|--------|------|
-| `LISTEN_ADDR` | `:8082` | 서버 바인딩 주소 |
-| `PUBLIC_URL` | `http://localhost:8082` | issuer, discovery URL |
+| 변수 | 기본값 | docker-compose 값 | 설명 |
+|------|--------|-------------------|------|
+| `LISTEN_ADDR` | `:8082` | `:9082` | 서버 바인딩 주소 |
+| `PUBLIC_URL` | `http://localhost:8082` | `http://localhost:9082` | issuer, discovery URL |

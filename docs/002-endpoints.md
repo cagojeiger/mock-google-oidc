@@ -24,17 +24,17 @@ OIDC Discovery 문서.
 
 ```json
 {
-  "issuer": "http://localhost:8082",
-  "authorization_endpoint": "http://localhost:8082/o/oauth2/v2/auth",
-  "token_endpoint": "http://localhost:8082/token",
-  "userinfo_endpoint": "http://localhost:8082/v1/userinfo",
-  "jwks_uri": "http://localhost:8082/oauth2/v3/certs",
+  "issuer": "http://localhost:9082",
+  "authorization_endpoint": "http://localhost:9082/o/oauth2/v2/auth",
+  "token_endpoint": "http://localhost:9082/token",
+  "userinfo_endpoint": "http://localhost:9082/v1/userinfo",
+  "jwks_uri": "http://localhost:9082/oauth2/v3/certs",
   "response_types_supported": ["code"],
   "response_modes_supported": ["query"],
   "subject_types_supported": ["public"],
   "id_token_signing_alg_values_supported": ["RS256"],
   "scopes_supported": ["openid", "email", "profile"],
-  "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
+  "token_endpoint_auth_methods_supported": ["client_secret_post"],
   "claims_supported": ["aud", "email", "email_verified", "exp", "family_name", "given_name", "iat", "iss", "name", "picture", "sub"],
   "code_challenge_methods_supported": ["plain", "S256"],
   "grant_types_supported": ["authorization_code"]
@@ -43,6 +43,7 @@ OIDC Discovery 문서.
 
 주의:
 - `grant_types_supported`에 `refresh_token` 없음 (미지원)
+- `token_endpoint_auth_methods_supported`에 `client_secret_post`만 (basic 미지원)
 - `code_challenge_methods_supported`에 `plain`과 `S256` 모두 광고하며 실제 검증함
 
 ---
@@ -80,7 +81,7 @@ OIDC Discovery 문서.
 | `redirect_uri` | 필수 | hidden field |
 | `state` | 필수 | hidden field |
 | `email` | 필수 | 사용자 입력 |
-| `name` | 선택 | 사용자 입력 |
+| `name` | 필수 | 사용자 입력 (HTML required) |
 | `nonce` | 선택 | hidden field |
 | `scope` | 선택 | hidden field |
 | `client_id` | 선택 | hidden field |
@@ -101,7 +102,7 @@ OIDC Discovery 문서.
 ```
 sub = fmt.Sprintf("%x", sha256(email)[:10])
 ```
-- 20자리 hex 문자열 (예: `e3b0c44298fc1c149afb`)
+- 20자리 hex 문자열 (예: `c160f8cc69a4f0bf2b0c`)
 - 같은 이메일 → 항상 같은 sub
 - 다른 이메일 → 다른 sub
 
@@ -115,11 +116,11 @@ sub = fmt.Sprintf("%x", sha256(email)[:10])
 
 | 필드 | 필수 | 설명 |
 |------|------|------|
-| `code` | 필수 | authorization code |
+| `grant_type` | 필수 | `authorization_code` (다른 값 → 400 `unsupported_grant_type`) |
+| `code` | 필수 | authorization code (1회용) |
 | `client_id` | 필수 | 클라이언트 ID (검증 안 함) |
 | `client_secret` | 필수 | 클라이언트 시크릿 (검증 안 함) |
 | `redirect_uri` | 필수 | (검증 안 함) |
-| `grant_type` | 필수 | `authorization_code` |
 | `code_verifier` | PKCE 시 필수 | PKCE verifier |
 
 **PKCE 검증:**
@@ -127,6 +128,10 @@ sub = fmt.Sprintf("%x", sha256(email)[:10])
 - S256: `base64url(sha256(code_verifier)) == code_challenge`
 - plain: `code_verifier == code_challenge`
 - 불일치 시 400 `invalid_grant`
+
+**code 1회용:**
+- code는 토큰 교환 시 소비(삭제)됨
+- 같은 code로 재요청 시 400 `invalid_grant`
 
 **응답:**
 
@@ -141,11 +146,19 @@ sub = fmt.Sprintf("%x", sha256(email)[:10])
 }
 ```
 
-code 미존재 (400):
+code 미존재/재사용 (400):
 ```json
 {
   "error": "invalid_grant",
   "error_description": "Code not found or already redeemed."
+}
+```
+
+grant_type 오류 (400):
+```json
+{
+  "error": "unsupported_grant_type",
+  "error_description": "Only authorization_code is supported."
 }
 ```
 
@@ -168,8 +181,8 @@ token_error 모드 (500):
 **id_token JWT 클레임:**
 ```json
 {
-  "iss": "http://localhost:8082",
-  "sub": "e3b0c44298fc1c149afb",
+  "iss": "http://localhost:9082",
+  "sub": "c160f8cc69a4f0bf2b0c",
   "aud": "client_id_value",
   "exp": 1353604926,
   "iat": 1353601026,
@@ -195,7 +208,7 @@ Authorization: Bearer {access_token}
 **정상 응답 (200):**
 ```json
 {
-  "sub": "e3b0c44298fc1c149afb",
+  "sub": "c160f8cc69a4f0bf2b0c",
   "name": "Alice",
   "given_name": "Alice",
   "family_name": "",
