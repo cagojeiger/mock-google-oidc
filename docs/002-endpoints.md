@@ -34,7 +34,7 @@ OIDC Discovery 문서.
   "subject_types_supported": ["public"],
   "id_token_signing_alg_values_supported": ["RS256"],
   "scopes_supported": ["openid", "email", "profile"],
-  "token_endpoint_auth_methods_supported": ["client_secret_post"],
+  "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
   "claims_supported": ["aud", "email", "email_verified", "exp", "family_name", "given_name", "iat", "iss", "name", "picture", "sub"],
   "code_challenge_methods_supported": ["plain", "S256"],
   "grant_types_supported": ["authorization_code"]
@@ -43,7 +43,7 @@ OIDC Discovery 문서.
 
 주의:
 - `grant_types_supported`에 `refresh_token` 없음 (미지원)
-- `token_endpoint_auth_methods_supported`에 `client_secret_post`만 (basic 미지원)
+- `token_endpoint_auth_methods_supported`에 `client_secret_post`와 `client_secret_basic` 모두 지원
 - `code_challenge_methods_supported`에 `plain`과 `S256` 모두 광고하며 실제 검증함
 
 ---
@@ -81,7 +81,7 @@ OIDC Discovery 문서.
 | `redirect_uri` | 필수 | hidden field |
 | `state` | 필수 | hidden field |
 | `email` | 필수 | 사용자 입력 |
-| `name` | 필수 | 사용자 입력 (HTML required) |
+| `name` | 필수 | 사용자 입력 (서버 + HTML required) |
 | `nonce` | 선택 | hidden field |
 | `scope` | 선택 | hidden field |
 | `client_id` | 선택 | hidden field |
@@ -118,10 +118,15 @@ sub = fmt.Sprintf("%x", sha256(email)[:10])
 |------|------|------|
 | `grant_type` | 필수 | `authorization_code` (다른 값 → 400 `unsupported_grant_type`) |
 | `code` | 필수 | authorization code (1회용) |
-| `client_id` | 필수 | 클라이언트 ID (검증 안 함) |
-| `client_secret` | 필수 | 클라이언트 시크릿 (검증 안 함) |
-| `redirect_uri` | 필수 | (검증 안 함) |
+| `client_id` | 필수 | 클라이언트 ID (authorize 시 저장된 값과 매칭) |
+| `client_secret` | 필수 | 클라이언트 시크릿 (값 자체는 검증 안 함, 존재만 확인) |
+| `redirect_uri` | 필수 | (존재만 확인) |
 | `code_verifier` | PKCE 시 필수 | PKCE verifier |
+
+**인증 방식:**
+- `client_secret_post`: form body에 `client_id` + `client_secret` 전달
+- `client_secret_basic`: `Authorization: Basic base64(client_id:client_secret)` 헤더
+- 두 방식 모두 지원. Basic 헤더가 있으면 form body보다 우선
 
 **PKCE 검증:**
 - code에 `code_challenge`가 저장되어 있으면 `code_verifier` 필수
@@ -130,8 +135,9 @@ sub = fmt.Sprintf("%x", sha256(email)[:10])
 - 불일치 시 400 `invalid_grant`
 
 **code 1회용:**
-- code는 토큰 교환 시 소비(삭제)됨
+- code는 토큰 교환 성공 시 소비(삭제)됨
 - 같은 code로 재요청 시 400 `invalid_grant`
+- PKCE 검증 실패 시에는 code가 소비되지 않음 (올바른 verifier로 재시도 가능)
 
 **응답:**
 

@@ -173,6 +173,19 @@ func TestAuthorizePOST_MissingEmail(t *testing.T) {
 	}
 }
 
+func TestAuthorizePOST_MissingName(t *testing.T) {
+	mux, _, _ := setupTestServer()
+	w := postAuthorize(mux, url.Values{
+		"redirect_uri": {"http://example.com/cb"},
+		"state":        {"abc"},
+		"email":        {"alice@example.com"},
+	})
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
 // --- Token ---
 
 func postToken(mux *http.ServeMux, values url.Values) *httptest.ResponseRecorder {
@@ -537,6 +550,106 @@ func TestToken_NoPKCE_StillWorks(t *testing.T) {
 
 	if w.Code != 200 {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestToken_ClientSecretBasic_Valid(t *testing.T) {
+	mux, store, _ := setupTestServer()
+	store.SaveCode("basic-auth-code", &CodeEntry{
+		Sub:          "sub1",
+		Email:        "basic@example.com",
+		Name:         "Basic User",
+		ClientID:     "app1",
+		ResponseMode: "normal",
+	})
+
+	values := url.Values{
+		"code":         {"basic-auth-code"},
+		"redirect_uri": {"http://example.com/cb"},
+		"grant_type":   {"authorization_code"},
+	}
+	req := httptest.NewRequest("POST", "/token", strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth("app1", "secret")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestToken_CodeReusableAfterSuccess(t *testing.T) {
+	mux, store, _ := setupTestServer()
+	store.SaveCode("single-use-code", &CodeEntry{
+		Sub:          "sub1",
+		Email:        "single@example.com",
+		Name:         "Single User",
+		ClientID:     "app1",
+		ResponseMode: "normal",
+	})
+
+	first := postToken(mux, url.Values{
+		"code":          {"single-use-code"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/cb"},
+		"grant_type":    {"authorization_code"},
+	})
+	if first.Code != 200 {
+		t.Fatalf("expected first exchange to succeed, got %d", first.Code)
+	}
+
+	second := postToken(mux, url.Values{
+		"code":          {"single-use-code"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/cb"},
+		"grant_type":    {"authorization_code"},
+	})
+	if second.Code != 400 {
+		t.Fatalf("expected second exchange to fail, got %d", second.Code)
+	}
+}
+
+func TestToken_PKCEFailureDoesNotConsumeCode(t *testing.T) {
+	mux, store, _ := setupTestServer()
+	verifier := "correct-verifier"
+	h := sha256.Sum256([]byte(verifier))
+	challenge := base64.RawURLEncoding.EncodeToString(h[:])
+
+	store.SaveCode("pkce-retry", &CodeEntry{
+		Sub:                 "sub1",
+		Email:               "pkce@example.com",
+		Name:                "PKCE User",
+		ClientID:            "app1",
+		ResponseMode:        "normal",
+		CodeChallenge:       challenge,
+		CodeChallengeMethod: "S256",
+	})
+
+	bad := postToken(mux, url.Values{
+		"code":          {"pkce-retry"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/cb"},
+		"grant_type":    {"authorization_code"},
+		"code_verifier": {"wrong-verifier"},
+	})
+	if bad.Code != 400 {
+		t.Fatalf("expected bad verifier to fail, got %d", bad.Code)
+	}
+
+	good := postToken(mux, url.Values{
+		"code":          {"pkce-retry"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/cb"},
+		"grant_type":    {"authorization_code"},
+		"code_verifier": {verifier},
+	})
+	if good.Code != 200 {
+		t.Fatalf("expected retry with correct verifier to succeed, got %d: %s", good.Code, good.Body.String())
 	}
 }
 

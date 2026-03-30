@@ -35,7 +35,7 @@ func handleDiscovery(publicURL string) http.HandlerFunc {
 			"subject_types_supported":               []string{"public"},
 			"id_token_signing_alg_values_supported": []string{"RS256"},
 			"scopes_supported":                      []string{"openid", "email", "profile"},
-			"token_endpoint_auth_methods_supported": []string{"client_secret_post"},
+			"token_endpoint_auth_methods_supported": []string{"client_secret_post", "client_secret_basic"},
 			"claims_supported":                      []string{"aud", "email", "email_verified", "exp", "family_name", "given_name", "iat", "iss", "name", "picture", "sub"},
 			"code_challenge_methods_supported":      []string{"plain", "S256"},
 			"grant_types_supported":                 []string{"authorization_code"},
@@ -91,6 +91,10 @@ func handleAuthorizePOST(store *Store) http.HandlerFunc {
 			http.Error(w, "missing email", http.StatusBadRequest)
 			return
 		}
+		if name == "" {
+			http.Error(w, "missing name", http.StatusBadRequest)
+			return
+		}
 
 		responseMode := r.FormValue("response_mode")
 		if responseMode == "" {
@@ -140,9 +144,32 @@ func handleToken(publicURL string, keys *KeyPair, store *Store) http.HandlerFunc
 		}
 		r.ParseForm()
 
+		clientID := r.FormValue("client_id")
+		clientSecret := r.FormValue("client_secret")
+		if basicClientID, basicClientSecret, ok := parseBasicClientAuth(r); ok {
+			if clientID == "" {
+				clientID = basicClientID
+			}
+			if clientSecret == "" {
+				clientSecret = basicClientSecret
+			}
+		}
+
 		grantType := r.FormValue("grant_type")
 		if grantType != "authorization_code" {
 			jsonError(w, http.StatusBadRequest, "unsupported_grant_type", "Only authorization_code is supported.")
+			return
+		}
+		if clientID == "" {
+			jsonError(w, http.StatusBadRequest, "invalid_request", "client_id is required.")
+			return
+		}
+		if clientSecret == "" {
+			jsonError(w, http.StatusBadRequest, "invalid_request", "client_secret is required.")
+			return
+		}
+		if r.FormValue("redirect_uri") == "" {
+			jsonError(w, http.StatusBadRequest, "invalid_request", "redirect_uri is required.")
 			return
 		}
 
@@ -152,9 +179,13 @@ func handleToken(publicURL string, keys *KeyPair, store *Store) http.HandlerFunc
 			return
 		}
 
-		entry, ok := store.ConsumeCode(code)
+		entry, ok := store.LoadCode(code)
 		if !ok {
 			jsonError(w, http.StatusBadRequest, "invalid_grant", "Code not found or already redeemed.")
+			return
+		}
+		if entry.ClientID != "" && entry.ClientID != clientID {
+			jsonError(w, http.StatusBadRequest, "invalid_grant", "client_id does not match the authorization code.")
 			return
 		}
 
@@ -174,6 +205,12 @@ func handleToken(publicURL string, keys *KeyPair, store *Store) http.HandlerFunc
 				jsonError(w, http.StatusBadRequest, "invalid_grant", "PKCE verification failed.")
 				return
 			}
+		}
+
+		entry, ok = store.ConsumeCode(code)
+		if !ok {
+			jsonError(w, http.StatusBadRequest, "invalid_grant", "Code not found or already redeemed.")
+			return
 		}
 
 		accessToken := "ya29." + randomCode()
@@ -278,6 +315,25 @@ func verifyPKCE(challenge, method, verifier string) bool {
 	default:
 		return false
 	}
+}
+
+func parseBasicClientAuth(r *http.Request) (string, string, bool) {
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Basic ") {
+		return "", "", false
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(auth, "Basic "))
+	if err != nil {
+		return "", "", false
+	}
+
+	parts := strings.SplitN(string(raw), ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+
+	return parts[0], parts[1], true
 }
 
 func jsonError(w http.ResponseWriter, status int, errCode, desc string) {
