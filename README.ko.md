@@ -8,6 +8,8 @@
 
 ## 한눈에 보기
 
+![demo](docs/demo.gif)
+
 ```text
 [브라우저]
     |
@@ -20,6 +22,14 @@
     +-> 이메일 + 이름 입력
     +-> Login 클릭
     +-> code / token / userinfo 반환
+```
+
+```text
+[localhost:4180]
+    -> [mock-google-oidc 로그인 화면]
+    -> [Login]
+    -> [oauth2-proxy callback]
+    -> [nginx]
 ```
 
 ## 빠른 시작

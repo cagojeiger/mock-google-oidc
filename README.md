@@ -10,6 +10,14 @@ Korean README: [README.ko.md](README.ko.md)
 
 ![demo](docs/demo.gif)
 
+```text
+[localhost:4180]
+    -> [mock-google-oidc login page]
+    -> [Login]
+    -> [oauth2-proxy callback]
+    -> [nginx]
+```
+
 ## Quick Start
 
 ```bash
