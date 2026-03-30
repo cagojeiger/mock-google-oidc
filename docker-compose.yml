@@ -1,0 +1,46 @@
+services:
+  mock-google-oidc:
+    build: .
+    ports:
+      - "9082:9082"
+    environment:
+      LISTEN_ADDR: ":9082"
+      PUBLIC_URL: "http://localhost:9082"
+
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.7.1
+    ports:
+      - "4180:4180"
+    command:
+      - --http-address=0.0.0.0:4180
+      - --provider=oidc
+      - --provider-display-name=MockGoogle
+      # discovery는 컨테이너 간 통신 (서버→서버)
+      - --oidc-issuer-url=http://mock-google-oidc:9082
+      # 브라우저 리다이렉트는 localhost (브라우저→서버)
+      - --login-url=http://localhost:9082/o/oauth2/v2/auth
+      - --redeem-url=http://mock-google-oidc:9082/token
+      - --oidc-jwks-url=http://mock-google-oidc:9082/oauth2/v3/certs
+      - --profile-url=http://mock-google-oidc:9082/v1/userinfo
+      - --client-id=test-client
+      - --client-secret=test-secret
+      - --cookie-secret=0123456789abcdef0123456789abcdef
+      - --redirect-url=http://localhost:4180/oauth2/callback
+      - --email-domain=*
+      - --upstream=http://upstream:80
+      - --skip-provider-button=true
+      - --cookie-secure=false
+      - --insecure-oidc-allow-unverified-email=true
+      - --insecure-oidc-skip-issuer-verification=true
+      - --skip-oidc-discovery=true
+      - --oidc-email-claim=email
+      - --code-challenge-method=S256
+      - --scope=openid email profile
+    depends_on:
+      - mock-google-oidc
+      - upstream
+
+  upstream:
+    image: nginx:alpine
+    ports:
+      - "9080:80"

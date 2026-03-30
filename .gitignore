@@ -27,6 +27,24 @@ go.work.sum
 # env file
 .env
 
+# Reference repos
+.repos/
+
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Build binaries
+mock-google-oidc
+test-idp
+
+# Playwright
+.playwright-mcp/
+
+# Screenshots (test artifacts)
+*.png
+*.jpeg
+
+# OMC / Claude
+.omc/
+.cache/
