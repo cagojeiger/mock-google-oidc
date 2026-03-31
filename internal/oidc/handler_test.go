@@ -1,4 +1,4 @@
-package main
+package oidc
 
 import (
 	"crypto/sha256"
@@ -12,12 +12,13 @@ import (
 )
 
 const testPublicURL = "http://localhost:8082"
+const testVersion = "test"
 
 func setupTestServer() (*http.ServeMux, *Store, *KeyPair) {
 	keys := NewKeyPair()
 	store := NewStore()
 	mux := http.NewServeMux()
-	RegisterHandlers(mux, testPublicURL, keys, store)
+	RegisterHandlers(mux, testPublicURL, keys, store, testVersion)
 	return mux, store, keys
 }
 
@@ -55,7 +56,7 @@ func TestDiscovery(t *testing.T) {
 
 func TestAuthorizeGET_Normal(t *testing.T) {
 	mux, _, _ := setupTestServer()
-	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri=http://example.com/cb&state=abc&client_id=app1&scope=openid", nil)
+	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri=http://example.com/cb&state=abc&client_id=app1&scope=openid&response_type=code", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -63,7 +64,7 @@ func TestAuthorizeGET_Normal(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "alice@example.com") {
+	if !strings.Contains(body, "alice@gmail.com") {
 		t.Error("expected default email in form")
 	}
 	if !strings.Contains(body, "http://example.com/cb") {
@@ -73,7 +74,7 @@ func TestAuthorizeGET_Normal(t *testing.T) {
 
 func TestAuthorizeGET_LoginHint(t *testing.T) {
 	mux, _, _ := setupTestServer()
-	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri=http://example.com/cb&state=abc&login_hint=bob@test.com", nil)
+	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri=http://example.com/cb&state=abc&login_hint=bob@test.com&scope=openid&response_type=code", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -104,6 +105,66 @@ func TestAuthorizeGET_MissingState(t *testing.T) {
 
 	if w.Code != 400 {
 		t.Fatalf("expected 400, got %d", w.Code)
+	}
+}
+
+func TestAuthorizeGET_MissingResponseType(t *testing.T) {
+	mux, _, _ := setupTestServer()
+	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri=http://example.com/cb&state=abc&scope=openid", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 302 {
+		t.Fatalf("expected 302 redirect with error, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "unsupported_response_type" {
+		t.Errorf("expected error=unsupported_response_type, got %q", loc.Query().Get("error"))
+	}
+}
+
+func TestAuthorizeGET_InvalidResponseType(t *testing.T) {
+	mux, _, _ := setupTestServer()
+	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri=http://example.com/cb&state=abc&scope=openid&response_type=token", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 302 {
+		t.Fatalf("expected 302 redirect with error, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "unsupported_response_type" {
+		t.Errorf("expected error=unsupported_response_type, got %q", loc.Query().Get("error"))
+	}
+}
+
+func TestAuthorizeGET_MissingOpenIDScope(t *testing.T) {
+	mux, _, _ := setupTestServer()
+	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri=http://example.com/cb&state=abc&scope=email&response_type=code", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 302 {
+		t.Fatalf("expected 302 redirect with error, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "invalid_scope" {
+		t.Errorf("expected error=invalid_scope, got %q", loc.Query().Get("error"))
+	}
+}
+
+func TestAuthorizeGET_PromptNone(t *testing.T) {
+	mux, _, _ := setupTestServer()
+	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri=http://example.com/cb&state=abc&scope=openid&response_type=code&prompt=none", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != 302 {
+		t.Fatalf("expected 302 redirect with error, got %d", w.Code)
+	}
+	loc, _ := url.Parse(w.Header().Get("Location"))
+	if loc.Query().Get("error") != "login_required" {
+		t.Errorf("expected error=login_required, got %q", loc.Query().Get("error"))
 	}
 }
 
@@ -203,6 +264,7 @@ func TestToken_Normal(t *testing.T) {
 		Email:        "alice@example.com",
 		Name:         "Alice",
 		ClientID:     "app1",
+		RedirectURI:  "http://example.com/cb",
 		Scope:        "openid email profile",
 		ResponseMode: "normal",
 	})
@@ -233,6 +295,63 @@ func TestToken_Normal(t *testing.T) {
 	}
 	if resp["expires_in"] != float64(3920) {
 		t.Errorf("expected expires_in 3920, got %v", resp["expires_in"])
+	}
+}
+
+func TestToken_CacheControlHeader(t *testing.T) {
+	mux, store, _ := setupTestServer()
+	store.SaveCode("cache-code", &CodeEntry{
+		Sub:          "sub1",
+		Email:        "cache@example.com",
+		Name:         "Cache User",
+		RedirectURI:  "http://example.com/cb",
+		ResponseMode: "normal",
+	})
+
+	w := postToken(mux, url.Values{
+		"code":          {"cache-code"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/cb"},
+		"grant_type":    {"authorization_code"},
+	})
+
+	if w.Code != 200 {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Errorf("expected Cache-Control: no-store, got %q", cc)
+	}
+	if pragma := w.Header().Get("Pragma"); pragma != "no-cache" {
+		t.Errorf("expected Pragma: no-cache, got %q", pragma)
+	}
+}
+
+func TestToken_RedirectURIMismatch(t *testing.T) {
+	mux, store, _ := setupTestServer()
+	store.SaveCode("redir-code", &CodeEntry{
+		Sub:          "sub1",
+		Email:        "redir@example.com",
+		Name:         "Redir User",
+		RedirectURI:  "http://example.com/cb",
+		ResponseMode: "normal",
+	})
+
+	w := postToken(mux, url.Values{
+		"code":          {"redir-code"},
+		"client_id":     {"app1"},
+		"client_secret": {"secret"},
+		"redirect_uri":  {"http://example.com/other"},
+		"grant_type":    {"authorization_code"},
+	})
+
+	if w.Code != 400 {
+		t.Fatalf("expected 400, got %d", w.Code)
+	}
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+	if resp["error"] != "invalid_grant" {
+		t.Errorf("expected invalid_grant, got %s", resp["error"])
 	}
 }
 
@@ -276,6 +395,8 @@ func TestToken_ErrorMode(t *testing.T) {
 	store.SaveCode("err-code", &CodeEntry{
 		Sub:          "sub1",
 		Email:        "err@example.com",
+		Name:         "Err User",
+		RedirectURI:  "http://example.com/cb",
 		ResponseMode: "token_error",
 	})
 
@@ -306,6 +427,7 @@ func TestToken_IDTokenClaims(t *testing.T) {
 		Name:         "Claims User",
 		Nonce:        "nonce123",
 		ClientID:     "app1",
+		RedirectURI:  "http://example.com/cb",
 		Scope:        "openid email profile",
 		ResponseMode: "normal",
 	})
@@ -342,9 +464,12 @@ func TestToken_IDTokenClaims(t *testing.T) {
 		"iss":            testPublicURL,
 		"sub":            DeterministicSub("claims@example.com"),
 		"aud":            "app1",
+		"azp":            "app1",
 		"email":          "claims@example.com",
 		"email_verified": true,
 		"name":           "Claims User",
+		"given_name":     "Claims",
+		"family_name":    "User",
 		"nonce":          "nonce123",
 	}
 	for k, want := range checks {
@@ -364,6 +489,8 @@ func TestToken_CodeSingleUse(t *testing.T) {
 	store.SaveCode("once-code", &CodeEntry{
 		Sub:          "sub1",
 		Email:        "once@example.com",
+		Name:         "Once User",
+		RedirectURI:  "http://example.com/cb",
 		ResponseMode: "normal",
 	})
 
@@ -397,6 +524,8 @@ func TestToken_WrongGrantType(t *testing.T) {
 	store.SaveCode("gt-code", &CodeEntry{
 		Sub:          "sub1",
 		Email:        "gt@example.com",
+		Name:         "GT User",
+		RedirectURI:  "http://example.com/cb",
 		ResponseMode: "normal",
 	})
 
@@ -421,7 +550,6 @@ func TestToken_WrongGrantType(t *testing.T) {
 
 func TestToken_PKCE_S256_Valid(t *testing.T) {
 	mux, store, _ := setupTestServer()
-	// S256: challenge = base64url(sha256(verifier))
 	verifier := "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 	h := sha256.Sum256([]byte(verifier))
 	challenge := base64.RawURLEncoding.EncodeToString(h[:])
@@ -431,6 +559,7 @@ func TestToken_PKCE_S256_Valid(t *testing.T) {
 		Email:               "pkce@example.com",
 		Name:                "PKCE User",
 		ClientID:            "app1",
+		RedirectURI:         "http://example.com/cb",
 		ResponseMode:        "normal",
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
@@ -459,6 +588,8 @@ func TestToken_PKCE_S256_Invalid(t *testing.T) {
 	store.SaveCode("pkce-bad", &CodeEntry{
 		Sub:                 "sub1",
 		Email:               "pkce@example.com",
+		Name:                "PKCE User",
+		RedirectURI:         "http://example.com/cb",
 		ResponseMode:        "normal",
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
@@ -488,6 +619,8 @@ func TestToken_PKCE_MissingVerifier(t *testing.T) {
 	store.SaveCode("pkce-noverify", &CodeEntry{
 		Sub:                 "sub1",
 		Email:               "pkce@example.com",
+		Name:                "PKCE User",
+		RedirectURI:         "http://example.com/cb",
 		ResponseMode:        "normal",
 		CodeChallenge:       "some-challenge",
 		CodeChallengeMethod: "S256",
@@ -513,6 +646,8 @@ func TestToken_PKCE_Plain_Valid(t *testing.T) {
 	store.SaveCode("pkce-plain", &CodeEntry{
 		Sub:                 "sub1",
 		Email:               "pkce@example.com",
+		Name:                "PKCE User",
+		RedirectURI:         "http://example.com/cb",
 		ResponseMode:        "normal",
 		CodeChallenge:       verifier,
 		CodeChallengeMethod: "plain",
@@ -537,6 +672,8 @@ func TestToken_NoPKCE_StillWorks(t *testing.T) {
 	store.SaveCode("no-pkce", &CodeEntry{
 		Sub:          "sub1",
 		Email:        "nopkce@example.com",
+		Name:         "NoPKCE User",
+		RedirectURI:  "http://example.com/cb",
 		ResponseMode: "normal",
 	})
 
@@ -560,6 +697,7 @@ func TestToken_ClientSecretBasic_Valid(t *testing.T) {
 		Email:        "basic@example.com",
 		Name:         "Basic User",
 		ClientID:     "app1",
+		RedirectURI:  "http://example.com/cb",
 		ResponseMode: "normal",
 	})
 
@@ -579,39 +717,6 @@ func TestToken_ClientSecretBasic_Valid(t *testing.T) {
 	}
 }
 
-func TestToken_CodeReusableAfterSuccess(t *testing.T) {
-	mux, store, _ := setupTestServer()
-	store.SaveCode("single-use-code", &CodeEntry{
-		Sub:          "sub1",
-		Email:        "single@example.com",
-		Name:         "Single User",
-		ClientID:     "app1",
-		ResponseMode: "normal",
-	})
-
-	first := postToken(mux, url.Values{
-		"code":          {"single-use-code"},
-		"client_id":     {"app1"},
-		"client_secret": {"secret"},
-		"redirect_uri":  {"http://example.com/cb"},
-		"grant_type":    {"authorization_code"},
-	})
-	if first.Code != 200 {
-		t.Fatalf("expected first exchange to succeed, got %d", first.Code)
-	}
-
-	second := postToken(mux, url.Values{
-		"code":          {"single-use-code"},
-		"client_id":     {"app1"},
-		"client_secret": {"secret"},
-		"redirect_uri":  {"http://example.com/cb"},
-		"grant_type":    {"authorization_code"},
-	})
-	if second.Code != 400 {
-		t.Fatalf("expected second exchange to fail, got %d", second.Code)
-	}
-}
-
 func TestToken_PKCEFailureDoesNotConsumeCode(t *testing.T) {
 	mux, store, _ := setupTestServer()
 	verifier := "correct-verifier"
@@ -623,6 +728,7 @@ func TestToken_PKCEFailureDoesNotConsumeCode(t *testing.T) {
 		Email:               "pkce@example.com",
 		Name:                "PKCE User",
 		ClientID:            "app1",
+		RedirectURI:         "http://example.com/cb",
 		ResponseMode:        "normal",
 		CodeChallenge:       challenge,
 		CodeChallengeMethod: "S256",
@@ -686,6 +792,12 @@ func TestUserinfo_Normal(t *testing.T) {
 	if info["name"] != "UI User" {
 		t.Errorf("wrong name: %v", info["name"])
 	}
+	if info["given_name"] != "UI" {
+		t.Errorf("wrong given_name: %v", info["given_name"])
+	}
+	if info["family_name"] != "User" {
+		t.Errorf("wrong family_name: %v", info["family_name"])
+	}
 	if info["email_verified"] != true {
 		t.Error("expected email_verified=true")
 	}
@@ -719,6 +831,7 @@ func TestUserinfo_ErrorMode(t *testing.T) {
 	errEntry := &CodeEntry{
 		Sub:          "sub1",
 		Email:        "err@example.com",
+		Name:         "Err User",
 		ResponseMode: "userinfo_error",
 	}
 	store.SaveToken("ya29.err-token", errEntry)
@@ -762,6 +875,17 @@ func TestCerts(t *testing.T) {
 	}
 	if key["kid"] != "test-idp-key-1" {
 		t.Errorf("expected kid=test-idp-key-1, got %v", key["kid"])
+	}
+}
+
+func TestCerts_CacheControl(t *testing.T) {
+	mux, _, _ := setupTestServer()
+	req := httptest.NewRequest("GET", "/oauth2/v3/certs", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if cc := w.Header().Get("Cache-Control"); !strings.HasPrefix(cc, "public") {
+		t.Errorf("expected Cache-Control starting with 'public', got %q", cc)
 	}
 }
 

@@ -1,4 +1,4 @@
-package main
+package oidc
 
 import (
 	"crypto"
@@ -22,7 +22,7 @@ func flowServer() (*http.ServeMux, *Store, *KeyPair) {
 // doAuthorizeGET performs the GET /o/oauth2/v2/auth step and returns the response.
 func doAuthorizeGET(t *testing.T, mux *http.ServeMux, redirectURI, state string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri="+url.QueryEscape(redirectURI)+"&state="+state+"&client_id=test-app&scope=openid+email+profile&nonce=testnonce", nil)
+	req := httptest.NewRequest("GET", "/o/oauth2/v2/auth?redirect_uri="+url.QueryEscape(redirectURI)+"&state="+state+"&client_id=test-app&scope=openid+email+profile&nonce=testnonce&response_type=code", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != 200 {
@@ -58,26 +58,6 @@ func doAuthorizePOSTWithPKCE(t *testing.T, mux *http.ServeMux, email, name, stat
 		t.Fatalf("invalid redirect Location: %v", err)
 	}
 	return loc
-}
-
-// doTokenWithVerifier performs POST /token with a code_verifier.
-func doTokenWithVerifier(t *testing.T, mux *http.ServeMux, code, verifier string) (int, map[string]any) {
-	t.Helper()
-	values := url.Values{
-		"code":          {code},
-		"client_id":     {"test-app"},
-		"client_secret": {"test-secret"},
-		"redirect_uri":  {"http://localhost:9090/callback"},
-		"grant_type":    {"authorization_code"},
-		"code_verifier": {verifier},
-	}
-	req := httptest.NewRequest("POST", "/token", strings.NewReader(values.Encode()))
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
-	var resp map[string]any
-	json.NewDecoder(w.Body).Decode(&resp)
-	return w.Code, resp
 }
 
 // doAuthorizePOST performs the POST /o/oauth2/v2/auth step and returns the redirect Location.
@@ -116,6 +96,26 @@ func doToken(t *testing.T, mux *http.ServeMux, code string) (int, map[string]any
 		"client_secret": {"test-secret"},
 		"redirect_uri":  {"http://localhost:9090/callback"},
 		"grant_type":    {"authorization_code"},
+	}
+	req := httptest.NewRequest("POST", "/token", strings.NewReader(values.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	var resp map[string]any
+	json.NewDecoder(w.Body).Decode(&resp)
+	return w.Code, resp
+}
+
+// doTokenWithVerifier performs POST /token with a code_verifier.
+func doTokenWithVerifier(t *testing.T, mux *http.ServeMux, code, verifier string) (int, map[string]any) {
+	t.Helper()
+	values := url.Values{
+		"code":          {code},
+		"client_id":     {"test-app"},
+		"client_secret": {"test-secret"},
+		"redirect_uri":  {"http://localhost:9090/callback"},
+		"grant_type":    {"authorization_code"},
+		"code_verifier": {verifier},
 	}
 	req := httptest.NewRequest("POST", "/token", strings.NewReader(values.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -218,7 +218,7 @@ func TestFullFlow_Normal(t *testing.T) {
 	doAuthorizeGET(t, mux, redirectURI, state)
 
 	// 2. POST authorize — login
-	loc := doAuthorizePOST(t, mux, "alice@example.com", "Alice", state, redirectURI, "normal")
+	loc := doAuthorizePOST(t, mux, "alice@example.com", "Alice Kim", state, redirectURI, "normal")
 	code := loc.Query().Get("code")
 	if code == "" {
 		t.Fatal("expected code in redirect")
@@ -246,11 +246,20 @@ func TestFullFlow_Normal(t *testing.T) {
 	if claims["email"] != "alice@example.com" {
 		t.Errorf("id_token email: got %v", claims["email"])
 	}
-	if claims["name"] != "Alice" {
+	if claims["name"] != "Alice Kim" {
 		t.Errorf("id_token name: got %v", claims["name"])
+	}
+	if claims["given_name"] != "Alice" {
+		t.Errorf("id_token given_name: got %v", claims["given_name"])
+	}
+	if claims["family_name"] != "Kim" {
+		t.Errorf("id_token family_name: got %v", claims["family_name"])
 	}
 	if claims["nonce"] != "testnonce" {
 		t.Errorf("id_token nonce: got %v", claims["nonce"])
+	}
+	if claims["azp"] != "test-app" {
+		t.Errorf("id_token azp: got %v", claims["azp"])
 	}
 
 	// 5. Verify id_token signature using JWKS
@@ -267,6 +276,12 @@ func TestFullFlow_Normal(t *testing.T) {
 	}
 	if userinfo["email"] != "alice@example.com" {
 		t.Errorf("userinfo email mismatch")
+	}
+	if userinfo["given_name"] != "Alice" {
+		t.Errorf("userinfo given_name: got %v", userinfo["given_name"])
+	}
+	if userinfo["family_name"] != "Kim" {
+		t.Errorf("userinfo family_name: got %v", userinfo["family_name"])
 	}
 
 	// 7. sub consistency: id_token sub == userinfo sub
