@@ -1,91 +1,100 @@
-# Spec 001: mock-google-oidc 개요
+# Spec 001: 프로젝트 개요
 
 ## 목적
 
-Google OAuth 2.0 / OpenID Connect **호환 mock Identity Provider**.
-패스워드 없이 이메일과 이름만 입력하면 로그인되며, Google과 호환되는 형식의 응답을 반환한다.
+이 프로젝트의 목적은 `Google 로그인 연동을 로컬과 테스트 환경에서 빠르게 검증할 수 있는 mock OIDC Provider`를 제공하는 것이다.
+
+이 서버는 실제 Google이 아니다.
+대신 앱이 기대하는 Google 로그인 흐름을 최대한 비슷하게 재현한다.
 
 ## 한 줄 요약
 
-```
-Google OIDC를 흉내내되, 로그인 화면에서 이메일+이름 입력하면 바로 인증 완료.
+```text
+Google 로그인 테스트를 위한 Google-compatible OIDC mock provider.
 ```
 
-## 성격
+## 전체 위치
 
+```text
+[브라우저]
+    |
+    v
+[내 앱 / oauth2-proxy]
+    |
+    v
+[mock-google-oidc]
+    |
+    +-> Google 스타일 authorize 경로
+    +-> token / userinfo / jwks
+    +-> password 없는 mock 로그인
 ```
-이것은 "Google과 동일한 OIDC Provider"가 아니라
-"Google OIDC 호환 지향 mock"이다.
 
-- HTTPS가 아닌 HTTP로 동작한다 (로컬 개발용)
-- client_id 매칭은 하지만 client_secret 값 자체는 검증하지 않는다
-- refresh_token을 지원하지 않는다
-- 구현 범위는 Authorization Code + PKCE 플로우에 한정한다
-- authorization code는 1회용 (OAuth 스펙 준수)
+## 무엇을 해결하나
+
+- 실제 Google 계정 없이 로그인 플로우를 검증하고 싶다
+- Google Cloud Console 설정 없이 로컬에서 통합 테스트를 돌리고 싶다
+- `oauth2-proxy` 같은 RP가 OIDC client로 제대로 붙는지 확인하고 싶다
+- PKCE, `nonce`, `userinfo`, JWKS 검증까지 포함한 흐름을 테스트하고 싶다
+
+## 제품 성격
+
+```text
+이 프로젝트는
+"범용 production OpenID Provider"가 아니라
+"Google 로그인 테스트용 mock provider"다.
 ```
+
+즉:
+- 표준 OIDC/OAuth 문서를 기준으로 핵심 계약을 정의한다
+- Google 문서를 기준으로 경로와 사용 패턴을 맞춘다
+- 로컬 mock 특성상 일부 항목은 의도적으로 단순화한다
 
 ## 설계 원칙
 
+1. Google 로그인 테스트에 필요한 경로와 claims를 제공한다.
+2. Authorization Code + PKCE 흐름을 안정적으로 지원한다.
+3. OIDC discovery와 JWKS를 통해 표준 클라이언트 검증이 가능해야 한다.
+4. 로그인 UX는 이메일+이름 입력만으로 최대한 단순화한다.
+5. 외부 서비스나 DB 없이 단독 실행 가능해야 한다.
+
+## 지원 범위
+
+| 항목 | 지원 여부 | 비고 |
+| --- | --- | --- |
+| Authorization Code Flow | 예 | 핵심 목표 |
+| PKCE `S256`, `plain` | 예 | 테스트 중요 항목 |
+| discovery | 예 | 표준 client 호환성 |
+| JWKS | 예 | RS256 검증용 |
+| `id_token` | 예 | RS256 |
+| `userinfo` | 예 | email/name 계열 claims |
+| `nonce` | 예 | 요청 시 `id_token`에 반영 |
+| deterministic `sub` | 예 | 이메일 기반 |
+| mock 에러 모드 | 예 | deny/token_error/userinfo_error |
+| refresh token | 아니오 | 목표 범위 밖 |
+| 실제 Google 계정 인증 | 아니오 | mock |
+| 엄격한 client registration | 아니오 | 단순화 |
+
+## 문서 구성
+
+```text
+001-overview.md
+  프로젝트 목표와 범위
+
+002-reference-specs.md
+  어떤 외부 스펙을 기준으로 삼는지
+
+003-endpoints.md
+  HTTP 계약
+
+004-google-compatibility.md
+  Google과 무엇을 맞추고 무엇을 단순화하는지
+
+005-flow.md
+  전체 인증 흐름
+
+006-conformance-boundary.md
+  MUST / SHOULD / intentionally non-compliant
+
+007-development.md
+  실행, 개발, 수동 검증
 ```
-1. Google OIDC Authorization Code 플로우와 호환되는 엔드포인트/요청/응답 형식
-2. PKCE (S256, plain) 지원
-3. 완전 독립 실행 — 외부 서비스, DB 없음
-4. 패스워드 없는 로그인 — 이메일 + 이름 입력 → 즉시 인증
-```
-
-## Google과의 대응 관계
-
-| Google | mock-google-oidc | 비고 |
-|--------|-----------------|------|
-| `accounts.google.com/o/oauth2/v2/auth` | `/o/oauth2/v2/auth` | 동일 경로 |
-| `oauth2.googleapis.com/token` | `/token` | POST body 형식 호환 |
-| `openidconnect.googleapis.com/v1/userinfo` | `/v1/userinfo` | 응답 JSON 형식 호환 |
-| `accounts.google.com/.well-known/openid-configuration` | `/.well-known/openid-configuration` | Discovery 문서 |
-| `www.googleapis.com/oauth2/v3/certs` | `/oauth2/v3/certs` | JWKS (공개키) |
-| Google 로그인 화면 (이메일 + 패스워드) | 이메일 + 이름 입력 화면 (패스워드 없음) | 유일한 UX 차이 |
-
-## 호환 범위
-
-| 기능 | 지원 | 비고 |
-|------|------|------|
-| Authorization Code Grant | 예 | |
-| PKCE (S256, plain) | 예 | |
-| id_token (RS256 JWT) | 예 | JWKS로 검증 가능 |
-| userinfo endpoint | 예 | |
-| Discovery document | 예 | |
-| nonce | 예 | id_token에 포함 |
-| email_verified | 예 | 항상 true |
-| authorization code 1회용 | 예 | ConsumeCode로 구현 |
-| grant_type 검증 | 예 | authorization_code 외 거부 |
-| refresh_token | **아니오** | discovery에서 미광고 |
-| client_id 매칭 | 예 | authorize 시 저장된 client_id와 비교 |
-| client_secret_post | 예 | form body |
-| client_secret_basic | 예 | Authorization: Basic 헤더 |
-| client_secret 값 검증 | **아니오** | 존재만 확인, 값은 수용 |
-| HTTPS | **아니오** | 로컬 HTTP만 |
-
-## oauth2-proxy 호환 체크리스트
-
-```
-oauth2-proxy가 기대하는 것     mock-google-oidc 지원
-─────────────────────────────────────────────────
-discovery 읽기                 ✓ /.well-known/openid-configuration
-auth endpoint redirect         ✓ /o/oauth2/v2/auth
-token endpoint code redeem     ✓ /token (+ PKCE + code 1회용)
-id_token issuer 검증           ✓ issuer = PUBLIC_URL
-id_token aud 검증              ✓ aud = client_id
-id_token RS256 서명 검증       ✓ JWKS /oauth2/v3/certs
-email claim                    ✓ 항상 포함
-email_verified                 ✓ 항상 true
-userinfo endpoint              ✓ /v1/userinfo
-nonce                          ✓ id_token에 포함
-PKCE code_challenge            ✓ S256, plain
-```
-
-## 기술 스택
-
-- **언어**: Go
-- **UI**: html/template (서버 사이드 렌더링, 외부 의존성 없음)
-- **JWT 서명**: RS256 (서버 시작 시 키 생성)
-- **상태**: 인메모리 (DB 없음, 재시작 시 초기화)
-- **외부 의존성**: 없음 (표준 라이브러리만)

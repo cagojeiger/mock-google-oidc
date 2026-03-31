@@ -1,4 +1,4 @@
-package main
+package oidc
 
 import (
 	"crypto/sha256"
@@ -15,6 +15,7 @@ type CodeEntry struct {
 	Nonce               string
 	Scope               string
 	ClientID            string
+	RedirectURI         string
 	ResponseMode        string // normal, deny, token_error, userinfo_error
 	CodeChallenge       string // PKCE code_challenge (S256 or plain)
 	CodeChallengeMethod string // "S256" or "plain"
@@ -24,7 +25,7 @@ type CodeEntry struct {
 // Store is an in-memory store for authorization codes and access tokens.
 type Store struct {
 	codes  sync.Map // code string → *CodeEntry
-	tokens sync.Map // access_token string → code string
+	tokens sync.Map // access_token string → *CodeEntry
 }
 
 func NewStore() *Store {
@@ -33,6 +34,7 @@ func NewStore() *Store {
 
 // SaveCode stores a CodeEntry keyed by the authorization code.
 func (s *Store) SaveCode(code string, entry *CodeEntry) {
+	entry.CreatedAt = time.Now()
 	s.codes.Store(code, entry)
 }
 
@@ -45,14 +47,18 @@ func (s *Store) LoadCode(code string) (*CodeEntry, bool) {
 	return v.(*CodeEntry), true
 }
 
-// ConsumeCode retrieves and deletes a CodeEntry. Returns false if not found.
+// ConsumeCode retrieves and deletes a CodeEntry. Returns false if not found or expired.
 // Authorization codes are single-use per OAuth spec.
 func (s *Store) ConsumeCode(code string) (*CodeEntry, bool) {
 	v, ok := s.codes.LoadAndDelete(code)
 	if !ok {
 		return nil, false
 	}
-	return v.(*CodeEntry), true
+	entry := v.(*CodeEntry)
+	if !ValidateCodeTTL(entry.CreatedAt, time.Now(), 10*time.Minute) {
+		return nil, false
+	}
+	return entry, true
 }
 
 // SaveToken maps an access token directly to a CodeEntry.

@@ -35,15 +35,11 @@ go.work.sum
 # .vscode/
 
 # Build binaries
-mock-google-oidc
-test-idp
+/mock-google-oidc
+/test-idp
 
 # Playwright
 .playwright-mcp/
-
-# Screenshots (test artifacts)
-*.png
-*.jpeg
 
 # OMC / Claude
 .omc/

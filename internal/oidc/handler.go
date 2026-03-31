@@ -1,4 +1,4 @@
-package main
+package oidc
 
 import (
 	"crypto/rand"
@@ -11,14 +11,14 @@ import (
 )
 
 // RegisterHandlers registers all HTTP handlers on the given mux.
-func RegisterHandlers(mux *http.ServeMux, publicURL string, keys *KeyPair, store *Store) {
+func RegisterHandlers(mux *http.ServeMux, publicURL string, keys *KeyPair, store *Store, version string) {
 	mux.HandleFunc("GET /.well-known/openid-configuration", handleDiscovery(publicURL))
 	mux.HandleFunc("GET /o/oauth2/v2/auth", handleAuthorizeGET())
 	mux.HandleFunc("POST /o/oauth2/v2/auth", handleAuthorizePOST(store))
 	mux.HandleFunc("POST /token", handleToken(publicURL, keys, store))
 	mux.HandleFunc("GET /v1/userinfo", handleUserinfo(store))
 	mux.HandleFunc("GET /oauth2/v3/certs", handleCerts(keys))
-	mux.HandleFunc("GET /health", handleHealth())
+	mux.HandleFunc("GET /health", handleHealth(version))
 }
 
 func handleDiscovery(publicURL string) http.HandlerFunc {
@@ -52,7 +52,25 @@ func handleAuthorizeGET() http.HandlerFunc {
 			return
 		}
 
-		email := "alice@example.com"
+		// OIDC Core 3.1.2.1: response_type is REQUIRED
+		if err := ValidateResponseType(r.URL.Query().Get("response_type")); err != nil {
+			redirectWithError(w, r, redirectURI, state, "unsupported_response_type", "Only response_type=code is supported.")
+			return
+		}
+
+		// OIDC Core 3.1.2.1: scope MUST contain "openid"
+		if err := RequireOpenIDScope(r.URL.Query().Get("scope")); err != nil {
+			redirectWithError(w, r, redirectURI, state, "invalid_scope", "The openid scope is required.")
+			return
+		}
+
+		// OIDC Core 3.1.2.1: prompt=none requires no UI
+		if err := ValidatePrompt(r.URL.Query().Get("prompt")); err != nil {
+			redirectWithError(w, r, redirectURI, state, "login_required", "This mock provider always requires login.")
+			return
+		}
+
+		email := "alice@gmail.com"
 		if hint := r.URL.Query().Get("login_hint"); hint != "" {
 			email = hint
 		}
@@ -103,15 +121,11 @@ func handleAuthorizePOST(store *Store) http.HandlerFunc {
 
 		// Deny mode: redirect with error, no code
 		if responseMode == "deny" {
-			u, _ := url.Parse(redirectURI)
-			q := u.Query()
-			q.Set("error", "access_denied")
-			q.Set("error_description", "The user denied access")
-			q.Set("state", state)
-			u.RawQuery = q.Encode()
-			http.Redirect(w, r, u.String(), http.StatusFound)
+			redirectWithError(w, r, redirectURI, state, "access_denied", "The user denied access")
 			return
 		}
+
+		givenName, familyName := SplitName(name)
 
 		code := randomCode()
 		entry := &CodeEntry{
@@ -121,10 +135,13 @@ func handleAuthorizePOST(store *Store) http.HandlerFunc {
 			Nonce:               r.FormValue("nonce"),
 			Scope:               r.FormValue("scope"),
 			ClientID:            r.FormValue("client_id"),
+			RedirectURI:         redirectURI,
 			ResponseMode:        responseMode,
 			CodeChallenge:       r.FormValue("code_challenge"),
 			CodeChallengeMethod: r.FormValue("code_challenge_method"),
 		}
+		_ = givenName
+		_ = familyName
 		store.SaveCode(code, entry)
 
 		u, _ := url.Parse(redirectURI)
@@ -189,6 +206,12 @@ func handleToken(publicURL string, keys *KeyPair, store *Store) http.HandlerFunc
 			return
 		}
 
+		// RFC 6749 4.1.3: redirect_uri MUST match the one used in authorization
+		if !MatchRedirectURI(entry.RedirectURI, r.FormValue("redirect_uri")) {
+			jsonError(w, http.StatusBadRequest, "invalid_grant", "redirect_uri does not match the authorization request.")
+			return
+		}
+
 		if entry.ResponseMode == "token_error" {
 			jsonError(w, http.StatusInternalServerError, "server_error", "Internal server error.")
 			return
@@ -216,15 +239,18 @@ func handleToken(publicURL string, keys *KeyPair, store *Store) http.HandlerFunc
 		accessToken := "ya29." + randomCode()
 		store.SaveToken(accessToken, entry)
 
+		givenName, familyName := SplitName(entry.Name)
+
 		claims := map[string]any{
 			"iss":            publicURL,
 			"sub":            entry.Sub,
 			"aud":            entry.ClientID,
+			"azp":            entry.ClientID,
 			"email":          entry.Email,
 			"email_verified": true,
 			"name":           entry.Name,
-			"given_name":     entry.Name,
-			"family_name":    "",
+			"given_name":     givenName,
+			"family_name":    familyName,
 			"picture":        "",
 		}
 		if entry.Nonce != "" {
@@ -237,6 +263,9 @@ func handleToken(publicURL string, keys *KeyPair, store *Store) http.HandlerFunc
 			return
 		}
 
+		// OIDC Core 3.1.3.3: MUST include Cache-Control: no-store
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Pragma", "no-cache")
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"access_token": accessToken,
@@ -268,12 +297,14 @@ func handleUserinfo(store *Store) http.HandlerFunc {
 			return
 		}
 
+		givenName, familyName := SplitName(entry.Name)
+
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"sub":            entry.Sub,
 			"name":           entry.Name,
-			"given_name":     entry.Name,
-			"family_name":    "",
+			"given_name":     givenName,
+			"family_name":    familyName,
 			"picture":        "",
 			"email":          entry.Email,
 			"email_verified": true,
@@ -284,11 +315,12 @@ func handleUserinfo(store *Store) http.HandlerFunc {
 func handleCerts(keys *KeyPair) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "public, max-age=3600")
 		json.NewEncoder(w).Encode(keys.JWKS())
 	}
 }
 
-func handleHealth() http.HandlerFunc {
+func handleHealth(version string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -334,6 +366,16 @@ func parseBasicClientAuth(r *http.Request) (string, string, bool) {
 	}
 
 	return parts[0], parts[1], true
+}
+
+func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURI, state, errCode, desc string) {
+	u, _ := url.Parse(redirectURI)
+	q := u.Query()
+	q.Set("error", errCode)
+	q.Set("error_description", desc)
+	q.Set("state", state)
+	u.RawQuery = q.Encode()
+	http.Redirect(w, r, u.String(), http.StatusFound)
 }
 
 func jsonError(w http.ResponseWriter, status int, errCode, desc string) {
